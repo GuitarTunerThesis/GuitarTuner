@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">GuitarTuner</string>
+    <string name="go_to_second_activity">Go to Second Activity</string>
+</resources>
