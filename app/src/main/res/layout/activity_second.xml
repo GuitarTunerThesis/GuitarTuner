@@ -39,4 +39,24 @@
         app:layout_constraintTop_toBottomOf="@+id/textView"
         tools:layout_editor_absoluteX="0dp" />
 
+    <TextView
+        android:id="@+id/freq_view"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="TextView"
+        app:layout_constraintBottom_toTopOf="@+id/button_to_main_activity"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@+id/mic_level_bar" />
+
+    <Button
+        android:id="@+id/method_button"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Change method"
+        app:layout_constraintBottom_toTopOf="@+id/mic_level_bar"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toTopOf="parent" />
+
 </androidx.constraintlayout.widget.ConstraintLayout>
