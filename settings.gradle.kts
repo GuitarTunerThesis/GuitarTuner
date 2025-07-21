@@ -19,5 +19,8 @@ dependencyResolutionManagement {
     }
 }
 
+
 rootProject.name = "GuitarTuner"
 include(":app")
+include(":core")
+include(":jvm")

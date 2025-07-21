@@ -6,12 +6,12 @@ import android.content.Intent
 import android.os.Bundle
 import android.widget.Button
 import androidx.appcompat.app.AppCompatActivity
-import android.media.MediaRecorder
 import android.os.Handler
 import android.os.Looper
 import android.widget.ProgressBar
 import android.media.AudioFormat
 import android.media.AudioRecord
+import android.media.MediaRecorder
 import android.util.Log
 import android.widget.TextView
 import androidx.activity.result.launch
@@ -29,8 +29,10 @@ import kotlin.math.cos
 import kotlin.math.min
 import kotlin.math.sin
 import kotlin.math.sqrt
+import org.jtransforms.fft.DoubleFFT_1D
 
 //AUDIO PAGE
+
 
 private var audioRecord: AudioRecord? = null
 private var recordingJob: Job? = null
@@ -107,53 +109,93 @@ fun amdf(signal: FloatArray, sampleRate: Int): Float {
 }
 
 // YIN Algorithm
-fun yin(signal: FloatArray, sampleRate: Int, threshold: Float = 0.1f): Float {
-    val size = signal.size
-    if (size == 0) return 0f
-
-    val yinBuffer = FloatArray(size / 2)
+fun yin(signal: FloatArray, sampleRate: Int): Float {
+    val bufferSize = signal.size
+    val halfBufferSize = bufferSize / 2
+    val yinBuffer = FloatArray(halfBufferSize)
+    val threshold = 0.15f // Slightly higher threshold for more reliable detection
 
     // Step 1: Difference function
-    for (tau in 0 until yinBuffer.size) {
-        var sum = 0f
-        for (i in 0 until yinBuffer.size) {
-            val delta = signal[i] - signal[i + tau]
-            sum += delta * delta
+    for (tau in 0 until halfBufferSize) {
+        yinBuffer[tau] = 0f
+        for (j in 0 until halfBufferSize) {
+            if (j + tau < bufferSize) { // Add bounds check
+                val delta = signal[j] - signal[j + tau]
+                yinBuffer[tau] += delta * delta
+            }
         }
-        yinBuffer[tau] = sum
     }
 
     // Step 2: Cumulative mean normalized difference function
     yinBuffer[0] = 1f
     var runningSum = 0f
-    for (tau in 1 until yinBuffer.size) {
+
+    for (tau in 1 until halfBufferSize) {
         runningSum += yinBuffer[tau]
-        yinBuffer[tau] *= tau / runningSum
-    }
-
-    // Step 3: Absolute threshold
-    val minTau = sampleRate / 1000
-    val maxTau = sampleRate / 50
-
-    for (tau in minTau until kotlin.math.min(yinBuffer.size, maxTau)) {
-        if (yinBuffer[tau] < threshold) {
-            // Step 4: Parabolic interpolation
-            var betterTau: Float = tau.toFloat()
-            if (tau > 0 && tau < yinBuffer.size - 1) {
-                val x0 = if (tau == 0) tau else tau - 1
-                val x2 = if (tau == yinBuffer.size - 1) tau else tau + 1
-
-                val a = (yinBuffer[x0] - 2 * yinBuffer[tau] + yinBuffer[x2]) / 2
-                val b = (yinBuffer[x2] - yinBuffer[x0]) / 2
-                if (a != 0f) {
-                    betterTau = tau - (b / (2 * a))
-                }
-            }
-            return sampleRate / betterTau
+        if (runningSum > 0) { // Prevent division by zero
+            yinBuffer[tau] *= tau / runningSum
         }
     }
 
-    return 0f
+    // Step 3: Find first minimum below threshold
+    var tau = -1
+    for (t in 2 until halfBufferSize - 1) { // Leave room for parabolic interpolation
+        if (yinBuffer[t] < threshold) {
+            // Check if this is actually a local minimum
+            if (yinBuffer[t] < yinBuffer[t - 1] && yinBuffer[t] <= yinBuffer[t + 1]) {
+                tau = t
+                break
+            }
+        }
+    }
+
+    // If no minimum found below threshold, find the global minimum after tau=2
+    if (tau == -1) {
+        var minTau = 2
+        var minVal = yinBuffer[2]
+        for (t in 3 until halfBufferSize - 1) {
+            if (yinBuffer[t] < minVal) {
+                minVal = yinBuffer[t]
+                minTau = t
+            }
+        }
+        // Only accept if it's reasonably good
+        if (minVal < 0.8f) {
+            tau = minTau
+        }
+    }
+
+    // Step 4: Parabolic interpolation
+    val betterTau = if (tau > 1 && tau < halfBufferSize - 1) {
+        val s0 = yinBuffer[tau - 1]
+        val s1 = yinBuffer[tau]
+        val s2 = yinBuffer[tau + 1]
+
+        val a = (s0 - 2 * s1 + s2) / 2f
+        val b = (s2 - s0) / 2f
+
+        if (a != 0f) {
+            val correction = -b / (2 * a)
+            tau + correction
+        } else {
+            tau.toFloat()
+        }
+    } else {
+        tau.toFloat()
+    }
+
+    // Convert period to frequency with validity check
+    return if (betterTau > 2f && betterTau < halfBufferSize) {
+        val frequency = sampleRate / betterTau
+        // Sanity check for reasonable frequency range
+        if (frequency > 50f && frequency < 4000f) {
+            frequency
+        } else {
+            0f
+        }
+    } else {
+        0f
+    }
 }
 
 // McLeod Pitch Method (MPM)
@@ -202,111 +244,129 @@ fun convertShortArrayToFloatArray(shortArray: ShortArray): FloatArray {
 }
 
 // Fast Fourier Transform (simplified version)
-fun fft(signal: FloatArray, sampleRate: Int): Float {
-    val size = signal.size
-    if (size == 0) return 0f
 
-    // Find next power of 2
-    val n = 1 shl (32 - Integer.numberOfLeadingZeros(size - 1))
-    val paddedSignal = FloatArray(n)
-    System.arraycopy(signal, 0, paddedSignal, 0, min(size, n))
+fun fftFreq(samples: FloatArray, sampleRate: Int): Double {
+    // Apply Hamming window to reduce spectral leakage
+    val windowedSamples = applyHammingWindow(samples)
 
-    // Simple magnitude spectrum calculation
-    val magnitudes = FloatArray(n / 2)
+    // Perform FFT using JTransforms
+    val fft = DoubleFFT_1D(windowedSamples.size.toLong())
 
-    for (k in 0 until n / 2) {
-        var realSum = 0f
-        var imagSum = 0f
-
-        for (i in 0 until n) {
-            val angle = -2.0 * PI * k * i / n
-            realSum += paddedSignal[i] * cos(angle).toFloat()
-            imagSum += paddedSignal[i] * sin(angle).toFloat()
-        }
-
-        magnitudes[k] = sqrt(realSum * realSum + imagSum * imagSum)
+    // Prepare data for JTransforms (interleaved real/imaginary format)
+    val fftData = DoubleArray(windowedSamples.size * 2)
+    for (i in windowedSamples.indices) {
+        fftData[i * 2] = windowedSamples[i].toDouble()     // Real part
+        fftData[i * 2 + 1] = 0.0                           // Imaginary part
     }
 
-    // Find peak frequency
-    var maxMag = 0f
-    var maxIndex = 0
+    // Perform FFT
+    fft.complexForward(fftData)
 
-    val minIndex = (50.0 * n / sampleRate).toInt()
-    val maxIndexLimit = (1000.0 * n / sampleRate).toInt()
+    // Calculate magnitudes and find dominant frequency
+    var maxMagnitude = 0.0
+    var maxIndex = 1 // Skip DC component
 
-    for (i in minIndex until min(magnitudes.size, maxIndexLimit)) {
-        if (magnitudes[i] > maxMag) {
-            maxMag = magnitudes[i]
+    // Only check positive frequencies (first half of FFT result)
+    for (i in 1 until windowedSamples.size / 2) {
+        val real = fftData[i * 2]
+        val imag = fftData[i * 2 + 1]
+        val magnitude = sqrt(real * real + imag * imag)
+
+        if (magnitude > maxMagnitude) {
+            maxMagnitude = magnitude
             maxIndex = i
         }
     }
 
-    return if (maxIndex == 0) 0f else maxIndex * sampleRate.toFloat() / n
+    // Convert bin index to frequency
+    return maxIndex * sampleRate.toDouble() / windowedSamples.size
 }
+
+private fun applyHammingWindow(samples: FloatArray): FloatArray {
+    val n = samples.size
+    val windowed = FloatArray(n)
+
+    for (i in 0 until n) {
+        val window = 0.54 - 0.46 * cos(2.0 * PI * i / (n - 1))
+        windowed[i] = samples[i] * window.toFloat()
+    }
+
+    return windowed
+}
+
 
 // Harmonic Product Spectrum
 fun harmonicProductSpectrum(signal: FloatArray, sampleRate: Int): Float {
-    val size = signal.size
-    if (size == 0) return 0f
+    val n = signal.size
+    val fft = DoubleFFT_1D(n.toLong())
 
-    // Calculate FFT magnitudes first
-    val n = 1 shl (32 - Integer.numberOfLeadingZeros(size - 1))
-    val paddedSignal = FloatArray(n)
-    System.arraycopy(signal, 0, paddedSignal, 0, min(size, n))
-
-    val magnitudes = FloatArray(n / 2)
-
-    for (k in 0 until n / 2) {
-        var realSum = 0f
-        var imagSum = 0f
-
-        for (i in 0 until n) {
-            val angle = -2.0 * PI * k * i / n
-            realSum += paddedSignal[i] * cos(angle).toFloat()
-            imagSum += paddedSignal[i] * sin(angle).toFloat()
-        }
-
-        magnitudes[k] = sqrt(realSum * realSum + imagSum * imagSum)
+    // Convert to double array for JTransforms
+    val fftData = DoubleArray(n * 2)
+    for (i in signal.indices) {
+        fftData[i * 2] = signal[i].toDouble()     // Real part
+        fftData[i * 2 + 1] = 0.0                 // Imaginary part
     }
 
-    // Apply HPS (multiply harmonics)
-    val hps = FloatArray(n / 8) // Reduce size for harmonic products
-    val numHarmonics = 5
+    // Perform FFT
+    fft.complexForward(fftData)
 
-    for (i in 0 until hps.size) {
-        hps[i] = magnitudes[i]
+    // Calculate magnitude spectrum
+    val magnitude = FloatArray(n / 2)
+    for (i in 0 until n / 2) {
+        val re = fftData[i * 2]
+        val im = fftData[i * 2 + 1]
+        magnitude[i] = sqrt(re * re + im * im).toFloat()
+    }
 
-        for (harmonic in 2..numHarmonics) {
-            val harmonicIndex = i * harmonic
-            if (harmonicIndex < magnitudes.size) {
-                hps[i] *= magnitudes[harmonicIndex]
+    // Apply harmonic product spectrum
+    val hpsSize = minOf(n / 16, magnitude.size / 5) // More conservative size
+    val hps = FloatArray(hpsSize)
+    for (i in hps.indices) {
+        hps[i] = magnitude[i]
+
+        // Multiply with harmonics (2nd, 3rd, 4th harmonic)
+        for (harmonic in 2..5) {
+            val idx = i * harmonic
+            if (idx < magnitude.size) {
+                hps[i] *= magnitude[idx]
             }
         }
+        hps[i] *= (1f / (1f + i * 0.001f))
     }
 
-    // Find peak in HPS
-    var maxHps = 0f
-    var maxIndex = 0
+    // Find peak frequency
+    val minFreq = 50f // Hz - avoid very low frequencies
+    val minIdx = Math.max(1, (minFreq * n / sampleRate).toInt())
 
-    val minIndex = (50.0 * n / sampleRate).toInt()
-    val maxIndexLimit = (1000.0 * n / sampleRate).toInt()
-
-    for (i in minIndex until min(hps.size, maxIndexLimit)) {
-        if (hps[i] > maxHps) {
-            maxHps = hps[i]
-            maxIndex = i
+    var maxIdx = minIdx
+    var maxVal = 0f
+    for (i in minIdx until hps.size) {
+        if (hps[i] > maxVal) {
+            maxVal = hps[i]
+            maxIdx = i
         }
     }
 
-    return if (maxIndex == 0) 0f else maxIndex * sampleRate.toFloat() / n
-}
+    val freq = if (maxIdx > 0 && maxIdx < hps.size - 1) {
+        val y1 = hps[maxIdx - 1]
+        val y2 = hps[maxIdx]
+        val y3 = hps[maxIdx + 1]
+        val a = (y1 - 2 * y2 + y3) / 2f
+        val b = (y3 - y1) / 2f
+        val correction = if (a != 0f) -b / (2 * a) else 0f
+        ((maxIdx + correction) * sampleRate.toFloat()) / n
+    } else {
+        (maxIdx * sampleRate.toFloat()) / n
+    }
 
+    return freq
+}
 enum class PitchDetectionMethod {
     AUTOCORRELATION,
     AMDF,
     YIN,
     MCLEOD,
-    FFT,
+    //FFT,
     HPS
 }
 
@@ -316,14 +376,13 @@ fun detectPitch(signal: FloatArray, sampleRate: Int, method: PitchDetectionMetho
         PitchDetectionMethod.AMDF -> amdf(signal, sampleRate)
         PitchDetectionMethod.YIN -> yin(signal, sampleRate)
         PitchDetectionMethod.MCLEOD -> mcleodPitchMethod(signal, sampleRate)
-        PitchDetectionMethod.FFT -> fft(signal, sampleRate)
+        //PitchDetectionMethod.FFT -> fftFreq(signal, sampleRate)
         PitchDetectionMethod.HPS -> harmonicProductSpectrum(signal, sampleRate)
     }
 }
 
 class SecondActivity : AppCompatActivity() {
 
-    private var recorder: MediaRecorder? = null
     private lateinit var micLevelBar: ProgressBar
     private lateinit var freqView: TextView
     private val handler = Handler(Looper.getMainLooper())
@@ -331,6 +390,7 @@ class SecondActivity : AppCompatActivity() {
     private var currentMethod = PitchDetectionMethod.AUTOCORRELATION
     private var methodIndex = 0
     private val methods = PitchDetectionMethod.values()
+    private var audioRecordBufferSizeInShorts: Int = 0
 
 
     @RequiresPermission(Manifest.permission.RECORD_AUDIO)
@@ -351,11 +411,11 @@ class SecondActivity : AppCompatActivity() {
             startActivity(intent)
         }
 
-        methodButton.setOnClickListener {
+        /*methodButton.setOnClickListener {
             methodIndex = (methodIndex + 1) % methods.size
             currentMethod = methods[methodIndex]
             Log.d("PitchDetection", "Switched to method: $currentMethod")
-        }
+        }*/
 
         startMicListeningWithAudioRecord(this)
 
@@ -370,18 +430,16 @@ class SecondActivity : AppCompatActivity() {
             return
         }
 
-        // Stop and release any previous MediaRecorder instance if it was being used
-        // This is important if you are switching from the old MediaRecorder logic
-        recorder?.stop()
-        recorder?.release()
-        recorder = null
+        val fixedSampleRate: Int = 4096
 
-        // Initialize buffer size for AudioRecord
-        audioRecordBufferSizeInBytes = AudioRecord.getMinBufferSize(
-            audioRecordSampleRate,
-            audioRecordChannelConfig,
-            audioRecordAudioFormat
-        )
+        audioRecordBufferSizeInShorts = fixedSampleRate
+
+        audioRecordBufferSizeInBytes = audioRecordBufferSizeInShorts * 2
+        //audioRecordBufferSizeInBytes = AudioRecord.getMinBufferSize(
+        //    audioRecordSampleRate,
+        //    audioRecordChannelConfig,
+        //    audioRecordAudioFormat
+        //)
 
         if (audioRecordBufferSizeInBytes == AudioRecord.ERROR_BAD_VALUE || audioRecordBufferSizeInBytes == AudioRecord.ERROR) {
             Log.e("AudioRecordListener", "Invalid AudioRecord parameters or unable to query capabilities.")
@@ -423,12 +481,17 @@ class SecondActivity : AppCompatActivity() {
 
                     if (readSize > 0) {
                         val floatSamples = convertShortArrayToFloatArray(audioRecordBuffer.copyOfRange(0, readSize))
-                        val results = mutableMapOf<PitchDetectionMethod, Float>()
-                        for (method in methods) {
+                        //val results = mutableMapOf<PitchDetectionMethod, Float>()
+                        /*for (method in methods) {
                             results[method] = detectPitch(floatSamples, audioRecordSampleRate, method)
-                        }
-                        val fundamentalFrequency = results[currentMethod] ?: 0f
-
+                        }*/
+                        //val fundamentalFrequency = results[currentMethod] ?: 0f
+                        //val fundamentalFrequency = autocorrelate(floatSamples, audioRecordSampleRate)
+                        //val fundamentalFrequency = amdf(floatSamples, audioRecordSampleRate)
+                        val fundamentalFrequency = yin(floatSamples, audioRecordSampleRate)
+                        //val fundamentalFrequency = mcleodPitchMethod(floatSamples, audioRecordSampleRate)
+                        //val fundamentalFrequency = fftFreq(floatSamples, audioRecordSampleRate)
+                        //val fundamentalFrequency = harmonicProductSpectrum(floatSamples, audioRecordSampleRate)
                         var maxAmplitude = 0
                         for (i in 0 until readSize) {
                             val currentSampleAbs = abs(audioRecordBuffer[i].toInt())
@@ -444,11 +507,11 @@ class SecondActivity : AppCompatActivity() {
 
                             if (fundamentalFrequency > 0) {
                                 freqView.text = "${currentMethod.name}: %.2f Hz".format(fundamentalFrequency)
-                                Log.d("PitchDetection", "Method: $currentMethod, Frequency: $fundamentalFrequency Hz")
+                                //Log.d("PitchDetection", "Method: $currentMethod, Frequency: $fundamentalFrequency Hz")
 
                                 // Log all results for comparison
-                                val resultsString = results.entries.joinToString(", ") { "${it.key.name}: %.1f".format(it.value) }
-                                Log.d("PitchComparison", "All methods - $resultsString")
+                                //val resultsString = results.entries.joinToString(", ") { "${it.key.name}: %.1f".format(it.value) }
+                                //Log.d("PitchComparison", "All methods - $resultsString")
                             } else {
                                 freqView.text = "${currentMethod.name}: -- Hz"
                             }
