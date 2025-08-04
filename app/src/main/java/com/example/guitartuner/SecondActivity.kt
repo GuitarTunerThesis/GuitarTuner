@@ -108,6 +108,19 @@ fun amdf(signal: FloatArray, sampleRate: Int): Float {
     return if (minLag == 0) 0f else sampleRate.toFloat() / minLag
 }
 
+fun zcr(signal: FloatArray, sampleRate: Int): Float {
+    var zeroCrossings = 0
+    for (i in 1 until signal.size) {
+        val prev = signal[i - 1]
+        val current = signal[i]
+        if ((prev >= 0 && current < 0) || (prev < 0 && current >= 0)) {
+            zeroCrossings++
+        }
+    }
+    val durationInSeconds = signal.size.toFloat() / sampleRate
+    return (zeroCrossings / (2 * durationInSeconds))
+}
+
 // YIN Algorithm
 fun yin(signal: FloatArray, sampleRate: Int): Float {
     val bufferSize = signal.size
@@ -411,11 +424,6 @@ class SecondActivity : AppCompatActivity() {
             startActivity(intent)
         }
 
-        /*methodButton.setOnClickListener {
-            methodIndex = (methodIndex + 1) % methods.size
-            currentMethod = methods[methodIndex]
-            Log.d("PitchDetection", "Switched to method: $currentMethod")
-        }*/
 
         startMicListeningWithAudioRecord(this)
 
@@ -488,10 +496,11 @@ class SecondActivity : AppCompatActivity() {
                         //val fundamentalFrequency = results[currentMethod] ?: 0f
                         //val fundamentalFrequency = autocorrelate(floatSamples, audioRecordSampleRate)
                         //val fundamentalFrequency = amdf(floatSamples, audioRecordSampleRate)
-                        val fundamentalFrequency = yin(floatSamples, audioRecordSampleRate)
+                        //val fundamentalFrequency = zcr(floatSamples, audioRecordSampleRate)
+                        //val fundamentalFrequency = yin(floatSamples, audioRecordSampleRate)
                         //val fundamentalFrequency = mcleodPitchMethod(floatSamples, audioRecordSampleRate)
                         //val fundamentalFrequency = fftFreq(floatSamples, audioRecordSampleRate)
-                        //val fundamentalFrequency = harmonicProductSpectrum(floatSamples, audioRecordSampleRate)
+                        val fundamentalFrequency = harmonicProductSpectrum(floatSamples, audioRecordSampleRate)
                         var maxAmplitude = 0
                         for (i in 0 until readSize) {
                             val currentSampleAbs = abs(audioRecordBuffer[i].toInt())
