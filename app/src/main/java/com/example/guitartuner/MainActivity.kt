@@ -22,7 +22,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.PaintingStyle.Companion.Stroke
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.CoroutineScope
@@ -31,10 +34,23 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.delay
+import kotlin.math.PI
 import kotlin.math.abs
+import kotlin.math.cos
+import kotlin.math.sin
 import kotlin.math.log2
 import kotlin.math.min
-
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.runtime.*
+import java.nio.file.WatchEvent
 
 
 private var audioRecord: AudioRecord? = null
@@ -101,6 +117,12 @@ private val dropD = mapOf(
     329.63 to "E4"
 )
 
+private val tunings = mapOf("Standard" to standardTuning, "Drop D" to dropD, "Open G" to standardTuning, "DADGAD" to standardTuning)
+
+object TuningState{
+    var selectedTuningName: String = "Standard"
+}
+
 fun autocorrelation(signal: FloatArray, sampleRate: Int): Float {
     val size = signal.size
     if (size == 0) return 0f
@@ -146,7 +168,44 @@ private fun findClosestNote(frequency: Float): String {
 }
 
 fun getTargetFrequencyForNote(noteName: String): Float? {
-    return dropD.entries.find { it.value.startsWith(noteName.substringBefore(" ")) }?.key?.toFloat()
+    val tuningMap = tunings[TuningState.selectedTuningName]?: return null
+    return tuningMap.entries.find { it.value.startsWith(noteName.substringBefore(" ")) }?.key?.toFloat()
+}
+
+
+@Composable
+fun TuningSelect(selectedTuning: String, onTuningSelected: (String) -> Unit) {
+
+    val tuningOptions = tunings.keys.toList()
+    var expanded by remember { mutableStateOf(false) }
+    var selectedTuning by remember { mutableStateOf(TuningState.selectedTuningName) }
+
+    Box(modifier = Modifier
+        .fillMaxWidth()
+        .border(1.dp, Color.Gray, RoundedCornerShape(4.dp))
+        .clickable { expanded = true }
+        .padding(12.dp),
+        contentAlignment = Alignment.Center)
+        {
+        Text(text = selectedTuning)
+
+
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false }
+        ) {
+            tuningOptions.forEach { tuning ->
+                DropdownMenuItem(
+                    text = { Text(tuning) },
+                    onClick = {
+                        selectedTuning = tuning
+                        TuningState.selectedTuningName = tuning
+                        expanded = false
+                    }
+                )
+            }
+        }
+    }
 }
 
 @Composable
@@ -210,6 +269,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var noteView: TextView
     private lateinit var composeView: ComposeView
 
+    private lateinit var dropdown: ComposeView
+
     private val handler = Handler(Looper.getMainLooper())
     private val updateInterval = 100L
     private var audioRecordBufferSizeInShorts: Int = 0
@@ -221,8 +282,10 @@ class MainActivity : AppCompatActivity() {
         freqView = findViewById(R.id.freqView)
         noteView = findViewById(R.id.note_view)
         composeView = findViewById(R.id.compose_view) // Assuming you have a ComposeView in your layout
+        dropdown = findViewById(R.id.dropdown)
 
         val buttonToSecondActivity: Button = findViewById(R.id.button_to_second_activity) // Assuming your button has this ID in your layout
+        var selectedTuning by mutableStateOf("Standard")
 
         buttonToSecondActivity.setOnClickListener {
             val intent = Intent(this, SecondActivity::class.java)
@@ -231,6 +294,11 @@ class MainActivity : AppCompatActivity() {
 
         composeView.setContent {
             GuitarStringVisualizer(note = "N/A", frequency = 0f) // Initial state
+        }
+        dropdown.setContent {androidx.compose.material3.MaterialTheme{
+            TuningSelect(selectedTuning = selectedTuning, onTuningSelected = { selectedTuning = it })
+        }
+
         }
 
         startMicListeningWithAudioRecord(this)
@@ -251,18 +319,11 @@ class MainActivity : AppCompatActivity() {
 
         audioRecordBufferSizeInBytes = 4096 // tai 8192
 
-
-        if (audioRecordBufferSizeInBytes == AudioRecord.ERROR_BAD_VALUE || audioRecordBufferSizeInBytes == AudioRecord.ERROR) {
-            Log.e("AudioRecordListener", "Invalid AudioRecord parameters or unable to query capabilities.")
-            // Handle error: e.g., show a message to the user
-            return
-        }
         audioRecordBuffer = ShortArray(audioRecordBufferSizeInBytes / 2) // Each Short is 2 bytes for PCM_16BIT
-        Log.d("AudioRecordListener", "AudioRecord buffer size: ${audioRecordBuffer.size} shorts")
 
         try {
             audioRecord = AudioRecord(
-                MediaRecorder.AudioSource.MIC, // Or AudioSource.VOICE_RECOGNITION etc.
+                MediaRecorder.AudioSource.MIC,
                 audioRecordSampleRate,
                 audioRecordChannelConfig,
                 audioRecordAudioFormat,
@@ -274,12 +335,6 @@ class MainActivity : AppCompatActivity() {
         }
 
 
-        if (audioRecord?.state != AudioRecord.STATE_INITIALIZED) {
-            Log.e("AudioRecordListener", "AudioRecord not initialized")
-            audioRecord?.release()
-            audioRecord = null
-            return
-        }
 
         try {
             audioRecord?.startRecording()
