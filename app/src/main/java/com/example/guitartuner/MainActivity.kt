@@ -7,12 +7,10 @@ import android.widget.Button
 import android.Manifest
 import android.os.Handler
 import android.os.Looper
-import android.widget.ProgressBar
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.util.Log
-import android.widget.Space
 import android.widget.TextView
 import androidx.annotation.RequiresPermission
 import androidx.compose.foundation.Canvas
@@ -24,8 +22,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.PaintingStyle.Companion.Stroke
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.CoroutineScope
@@ -34,23 +30,20 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.delay
-import kotlin.math.PI
 import kotlin.math.abs
-import kotlin.math.cos
-import kotlin.math.sin
 import kotlin.math.log2
 import kotlin.math.min
-import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.runtime.*
-import java.nio.file.WatchEvent
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.res.imageResource
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.nativeCanvas
 
 
 private var audioRecord: AudioRecord? = null
@@ -149,7 +142,10 @@ fun autocorrelation(signal: FloatArray, sampleRate: Int): Float {
             peakLag = i
         }
     }
-    return if (peakLag == 0 || peakValue <= 0) 0f else sampleRate.toFloat() / peakLag
+    return if (peakLag == 0 || peakValue <= 0) 0f
+    else if (sampleRate.toFloat() / peakLag > 800) 0f
+    else sampleRate.toFloat() / peakLag
+
 }
 
 private fun findClosestNote(frequency: Float): String {
@@ -182,6 +178,7 @@ fun TuningSelect(selectedTuning: String, onTuningSelected: (String) -> Unit) {
 
     Box(modifier = Modifier
         .fillMaxWidth()
+        .background(Color.LightGray, RoundedCornerShape(4.dp))
         .border(1.dp, Color.Gray, RoundedCornerShape(4.dp))
         .clickable { expanded = true }
         .padding(12.dp),
@@ -208,15 +205,15 @@ fun TuningSelect(selectedTuning: String, onTuningSelected: (String) -> Unit) {
     }
 }
 
+
 @Composable
 fun GuitarStringVisualizer(note: String, frequency: Float) {
+    val image = ImageBitmap.imageResource(id = R.drawable.indicator)
     val targetFrequency = getTargetFrequencyForNote(note)
-    // Calculate the difference in cents. 100 cents = 1 semitone.
-    // A positive value means the current frequency is sharp, negative means flat.
     val centsDifference = if (targetFrequency != null && targetFrequency > 0 && frequency > 0) {
         1200 * log2(frequency / targetFrequency)
     } else 0f
-    // More complex visualizations could involve animations based on frequency, etc.
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -231,35 +228,71 @@ fun GuitarStringVisualizer(note: String, frequency: Float) {
             .fillMaxWidth()
             .height(50.dp)) {
             val centerY = size.height / 2f
-            val meterWidth = size.width * 0.8f // Use 80% of the canvas width for the meter
+            val meterWidth = size.width * 0.8f
             val meterStartX = (size.width - meterWidth) / 2f
             val meterEndX = meterStartX + meterWidth
 
-            // Draw the horizontal meter line
+            val backgroundHeight = 460f
+            val backgroundPad = 110f
+            val backgroundTopY = centerY - backgroundHeight / 2f
+
+
+            drawRoundRect(
+                color = Color(0xFFEFEFEF),
+                topLeft = Offset(meterStartX-backgroundPad / 2f, backgroundTopY),
+                size = Size(meterWidth+backgroundPad, backgroundHeight),
+                cornerRadius = CornerRadius(30f, 30f)
+            )
+
             drawLine(
                 color = Color.Gray,
                 start = Offset(meterStartX, centerY),
                 end = Offset(meterEndX, centerY),
-                strokeWidth = 2f
+                strokeWidth = 4f
             )
 
-            // Draw the indicator
-            // Map cents difference to a position on the meter.
-            // Let's say +/- 50 cents maps to the edges of the meter.
+            val centCount = 5
             val maxCentsDisplay = 50f
+            for(i in 0..centCount){
+                val fraction = i / (centCount-1).toFloat()
+                val x = meterStartX + fraction * meterWidth
+                val cents = -maxCentsDisplay + (fraction * (maxCentsDisplay * 2))
+
+                drawLine(color = Color.Gray,
+                    start = Offset(x, centerY - 20f),
+                    end = Offset(x, centerY + 20f),
+                    strokeWidth = 2f)
+
+                drawContext.canvas.nativeCanvas.apply {
+                    drawText(
+                        "${cents.toInt()}",
+                        x,
+                        centerY + 60f,
+                        android.graphics.Paint().apply {
+                            color = android.graphics.Color.BLACK
+                            textAlign = android.graphics.Paint.Align.CENTER
+                            textSize = 30f
+                        }
+                    )
+                }
+            }
+
             val normalizedPosition = (centsDifference.coerceIn(-maxCentsDisplay, maxCentsDisplay) / maxCentsDisplay)
             val indicatorX = meterStartX + meterWidth / 2f + (normalizedPosition * meterWidth / 2f)
 
+
             if (frequency > 0 && targetFrequency != null) {
-                drawCircle(
-                    color = if (abs(centsDifference) < 5) Color.Green else Color.Red, // Green if within +/- 5 cents
-                    radius = 8f,
-                    center = Offset(indicatorX, centerY)
+                drawImage(
+                    image = image,
+                    topLeft = Offset(indicatorX - image.width / 2f, centerY - image.height / 2f)
                 )
+
             }
         }
     }
 }
+
+
 
 
 
@@ -278,14 +311,15 @@ class MainActivity : AppCompatActivity() {
     @RequiresPermission(Manifest.permission.RECORD_AUDIO)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_main) // Make sure you have this layout file
+        setContentView(R.layout.activity_main)
         freqView = findViewById(R.id.freqView)
         noteView = findViewById(R.id.note_view)
-        composeView = findViewById(R.id.compose_view) // Assuming you have a ComposeView in your layout
+        composeView = findViewById(R.id.compose_view)
         dropdown = findViewById(R.id.dropdown)
-
-        val buttonToSecondActivity: Button = findViewById(R.id.button_to_second_activity) // Assuming your button has this ID in your layout
         var selectedTuning by mutableStateOf("Standard")
+
+        val buttonToSecondActivity: Button = findViewById(R.id.button_to_second_activity)
+
 
         buttonToSecondActivity.setOnClickListener {
             val intent = Intent(this, SecondActivity::class.java)
@@ -293,7 +327,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         composeView.setContent {
-            GuitarStringVisualizer(note = "N/A", frequency = 0f) // Initial state
+            GuitarStringVisualizer(note = "N/A", frequency = 0f)
         }
         dropdown.setContent {androidx.compose.material3.MaterialTheme{
             TuningSelect(selectedTuning = selectedTuning, onTuningSelected = { selectedTuning = it })
@@ -303,7 +337,6 @@ class MainActivity : AppCompatActivity() {
 
         startMicListeningWithAudioRecord(this)
 
-
     }
 
     @RequiresPermission(Manifest.permission.RECORD_AUDIO)
@@ -312,10 +345,6 @@ class MainActivity : AppCompatActivity() {
             Log.w("AudioRecordListener", "AudioRecord is already recording.")
             return
         }
-
-        //val fixedSampleRate: Int = 4096
-
-        //audioRecordBufferSizeInShorts = fixedSampleRate
 
         audioRecordBufferSizeInBytes = 4096 // tai 8192
 
@@ -335,7 +364,6 @@ class MainActivity : AppCompatActivity() {
         }
 
 
-
         try {
             audioRecord?.startRecording()
             isAudioRecording = true
@@ -352,7 +380,7 @@ class MainActivity : AppCompatActivity() {
                         val note = findClosestNote(fundamentalFrequency)
 
                         withContext(Dispatchers.Main) {
-                            // Update UI less frequently by adding a delay or checking against previous values
+
 
                             if (fundamentalFrequency > 0) {
                                 freqView.text = "%.2f Hz".format(fundamentalFrequency)
@@ -366,7 +394,7 @@ class MainActivity : AppCompatActivity() {
 
                             }
                         }
-                        delay(100) // Add a delay to reduce update frequency, e.g., 100ms
+                        delay(40)
                     } else if (readSize < 0) {
                         Log.e("AudioRecordListener", "AudioRecord read error: $readSize")
                     }
@@ -381,7 +409,7 @@ class MainActivity : AppCompatActivity() {
             isAudioRecording = false
             audioRecord?.release()
             audioRecord = null
-        } catch (e: Exception) { // Catch any other unexpected error
+        } catch (e: Exception) {
             Log.e("AudioRecordListener", "An unexpected error occurred with AudioRecord", e)
             isAudioRecording = false
             audioRecord?.release()
