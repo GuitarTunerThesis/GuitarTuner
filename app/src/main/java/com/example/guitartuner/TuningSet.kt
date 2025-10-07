@@ -2,17 +2,12 @@ package com.example.guitartuner
 
 import android.content.Context
 import android.os.Bundle
-import android.view.LayoutInflater
-import android.view.View
-import android.view.ViewGroup
 import android.widget.Button
-import android.widget.EditText
 import android.widget.Spinner
 import android.widget.Toast
 import android.content.SharedPreferences
 import android.widget.ArrayAdapter
 import androidx.appcompat.app.AppCompatActivity
-import kotlin.math.log
 
 class TuningSet : AppCompatActivity() {
 
@@ -90,7 +85,6 @@ class TuningSet : AppCompatActivity() {
         )
 
         val notes = guitarNotes2.values.toList()
-        println(notes)
         val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, notes)
         adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
 

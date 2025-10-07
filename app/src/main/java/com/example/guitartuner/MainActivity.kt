@@ -12,13 +12,8 @@ import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.util.Log
-import android.view.LayoutInflater
-import android.widget.ArrayAdapter
-import android.widget.Spinner
 import android.widget.TextView
-import android.widget.Toast
 import androidx.annotation.RequiresPermission
-import androidx.appcompat.app.AlertDialog
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.Text
@@ -50,9 +45,6 @@ import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.res.imageResource
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.nativeCanvas
-import androidx.compose.ui.tooling.preview.Preview
-import androidx.compose.material3.Button as ComposeButton
-import androidx.core.content.edit
 import com.example.guitartuner.TuningSet.Companion.KEY_STRING_1
 import com.example.guitartuner.TuningSet.Companion.KEY_STRING_2
 import com.example.guitartuner.TuningSet.Companion.KEY_STRING_3
@@ -63,7 +55,7 @@ import kotlin.math.sqrt
 
 
 private var audioRecord: AudioRecord? = null
-private var isAudioRecording = false // To track AudioRecord state
+private var isAudioRecording = false
 private val audioRecordSampleRate = 44100
 private val audioRecordChannelConfig = AudioFormat.CHANNEL_IN_MONO
 private val audioRecordAudioFormat = AudioFormat.ENCODING_PCM_16BIT
@@ -130,8 +122,6 @@ private val dropD = mapOf(
     329.63 to "E4"
 )
 
-//val customTuning = loadCustomTuning(this)
-
 
 fun loadCustomTuning(context: Context): Map<Double, String>? {
     val sharedPreferences = context.getSharedPreferences("GuitarTunerPrefs", Context.MODE_PRIVATE)
@@ -144,7 +134,6 @@ fun loadCustomTuning(context: Context): Map<Double, String>? {
         sharedPreferences.getString(KEY_STRING_6, "E4")
     )
 
-    // Build map of frequency → note name
     return selectedNotes.mapNotNull { noteName ->
         guitarNotes.entries.firstOrNull { it.value == noteName }?.let { entry ->
             entry.key to entry.value
@@ -152,24 +141,30 @@ fun loadCustomTuning(context: Context): Map<Double, String>? {
     }.toMap()
 }
 
+fun loadCustomTuningList(context: Context): List<String> {
+    val sharedPreferences = context.getSharedPreferences("GuitarTunerPrefs", Context.MODE_PRIVATE)
+    return listOf(
+        sharedPreferences.getString(KEY_STRING_1, "E2") ?: "E2",
+        sharedPreferences.getString(KEY_STRING_2, "A2") ?: "A2",
+        sharedPreferences.getString(KEY_STRING_3, "D3") ?: "D3",
+        sharedPreferences.getString(KEY_STRING_4, "G3") ?: "G3",
+        sharedPreferences.getString(KEY_STRING_5, "B3") ?: "B3",
+        sharedPreferences.getString(KEY_STRING_6, "E4") ?: "E4"
+    )
+}
+
 private val tunings = mapOf("Standard" to standardTuning, "Drop D" to dropD, "Open G" to standardTuning, "DADGAD" to standardTuning)
 
 object TuningState{
-    var selectedTuningName: String = "Standard"
+    var selectedTuningName by mutableStateOf("Standard")
 
     var allTunings: Map<String, Map<Double, String>> = emptyMap()
-        private set // Allow external read, but only MainActivity (or a dedicated manager) should set this
+        private set
 
-    // Function to initialize or update all tunings
-    // Context is needed here to load custom tuning
     fun initialize(context: Context) {
-        val customTuningFromPrefs = loadCustomTuning(context) // Assuming loadCustomTuning is accessible
+        val customTuningFromPrefs = loadCustomTuning(context)
 
-        // Build the complete map of tunings
-        // Make sure standardTuning, dropD etc. are accessible here
-        // (e.g., defined in this file, imported, or passed as parameters)
         val availableTunings = tunings.toMutableMap()
-
 
         if (customTuningFromPrefs != null && customTuningFromPrefs.isNotEmpty()) {
             availableTunings["Custom"] = customTuningFromPrefs
@@ -177,9 +172,8 @@ object TuningState{
             Log.w("TuningState", "Custom tuning was null or empty, not adding to list.")
         }
 
-        allTunings = availableTunings.toMap() // Make it immutable after construction
+        allTunings = availableTunings.toMap()
 
-        // Ensure selectedTuningName is valid, otherwise default to "Standard" or first available
         if (!allTunings.containsKey(selectedTuningName)) {
             selectedTuningName = allTunings.keys.firstOrNull() ?: "Standard"
             Log.w("TuningState", "Previously selected tuning not found, defaulted to $selectedTuningName")
@@ -188,13 +182,28 @@ object TuningState{
     }
 }
 
+
+object CorrState{
+    var silenceFrames = 0
+    var currentPitch = 0f
+}
 fun autocorrelation(signal: FloatArray, sampleRate: Int): Float {
     val size = signal.size
     if (size == 0) return 0f
 
+
     val energy = rms(signal)
+    val maxSilentFrames = 5
+
     if (energy < 0.01f){
-        return 0f
+        CorrState.silenceFrames++
+        if (CorrState.silenceFrames > maxSilentFrames) {
+            CorrState.currentPitch = 0f
+        }
+        return CorrState.currentPitch
+    }
+    else {
+        CorrState.silenceFrames = 0
     }
 
     val result = FloatArray(size)
@@ -220,11 +229,18 @@ fun autocorrelation(signal: FloatArray, sampleRate: Int): Float {
         }
     }
 
+
+
     val clarity = peakValue / result[0]
     if (peakLag == 0 || clarity < 0.1f) return 0f
 
-    val frequency = sampleRate.toFloat() / peakLag
-    return if (frequency in 50f..800f) frequency else 0f
+    var frequency = if (peakLag == 0 || peakValue <= 0) 0f
+    else if (sampleRate.toFloat() / peakLag > 800) 0f
+    else sampleRate.toFloat() / peakLag
+
+
+    CorrState.currentPitch = frequency
+    return CorrState.currentPitch
 
 }
 
@@ -239,10 +255,11 @@ fun rms(signal: FloatArray): Float {
 private fun findClosestNote(frequency: Float): String {
     var closestNote = "Unknown"
     var minDifference = Double.MAX_VALUE
+    val currentTuningMap = TuningState.allTunings[TuningState.selectedTuningName] ?: guitarNotes
 
-    for ((noteFreq, noteName) in guitarNotes) {
+    for ((noteFreq, noteName) in currentTuningMap) {
         val difference = abs(frequency - noteFreq)
-        if (difference < minDifference) {
+        if (difference < minDifference && frequency > 50) {
             minDifference = difference
             closestNote = noteName
         }
@@ -381,6 +398,54 @@ fun GuitarStringVisualizer(note: String, frequency: Float) {
 }
 
 
+@Composable
+fun CurrentTuningNotes() {
+
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var selectedTuningName = TuningState.selectedTuningName
+
+    val tuningNotes = when (selectedTuningName) {
+        "Standard" -> listOf("E2", "A2", "D3", "G3", "B3", "E4")
+        "Drop D" -> listOf("D2", "A2", "D3", "G3", "B3", "E4")
+        "Open G" -> listOf("D2", "G2", "D3", "G3", "B3", "D4")
+        "DADGAD" -> listOf("D2", "A2", "D3", "G3", "A3", "D4")
+        "Custom" -> {
+            remember(selectedTuningName, context) {
+                loadCustomTuningList(context).reversed()
+            }
+        }
+        else -> emptyList()
+    }
+
+
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceEvenly
+            ) {
+                tuningNotes.forEach { noteName ->
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier
+                            .size(48.dp)
+                            .background(Color.Gray, shape = androidx.compose.foundation.shape.CircleShape)
+                    ) {
+                        Text(
+                            text = noteName.substringBefore(" "),
+                            style = androidx.compose.material3.MaterialTheme.typography.bodyLarge,
+                            color = Color.White
+                        )
+                    }
+                }
+            }
+
+    }
+}
+
+
 
 
 class MainActivity : AppCompatActivity() {
@@ -388,6 +453,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var freqView: TextView
     private lateinit var noteView: TextView
     private lateinit var composeView: ComposeView
+
+    private lateinit var composeView2: ComposeView
 
     private lateinit var dropdown: ComposeView
 
@@ -401,7 +468,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var customTuning: Map<Double, String>
     private lateinit var allTunings: Map<String, Map<Double, String>>
 
-
     @RequiresPermission(Manifest.permission.RECORD_AUDIO)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -409,8 +475,8 @@ class MainActivity : AppCompatActivity() {
         freqView = findViewById(R.id.freqView)
         noteView = findViewById(R.id.note_view)
         composeView = findViewById(R.id.compose_view)
+        composeView2 = findViewById(R.id.compose_view2)
         dropdown = findViewById(R.id.dropdown)
-        var selectedTuning by mutableStateOf("Standard")
 
         val buttonToSecondActivity: Button = findViewById(R.id.button_to_second_activity)
 
@@ -429,11 +495,21 @@ class MainActivity : AppCompatActivity() {
         composeView.setContent {
             GuitarStringVisualizer(note = "N/A", frequency = 0f)
         }
-        dropdown.setContent {androidx.compose.material3.MaterialTheme{
-            TuningSelect(selectedTuning = selectedTuning, onTuningSelected = { selectedTuning = it }, tuningsMap = allTunings)
+
+        composeView2.setContent { androidx.compose.material3.MaterialTheme {
+            CurrentTuningNotes()
         }
 
         }
+
+        dropdown.setContent {androidx.compose.material3.MaterialTheme{
+            TuningSelect(selectedTuning = TuningState.selectedTuningName, onTuningSelected = {
+                TuningState.selectedTuningName = it
+            }, tuningsMap = allTunings)
+        }
+
+        }
+
 
         startMicListeningWithAudioRecord(this)
 
@@ -445,8 +521,9 @@ class MainActivity : AppCompatActivity() {
             Log.w("AudioRecordListener", "AudioRecord is already recording.")
             return
         }
+        val minBufferSize = AudioRecord.getMinBufferSize(audioRecordSampleRate, audioRecordChannelConfig, audioRecordAudioFormat)
 
-        audioRecordBufferSizeInBytes = 4096 // tai 8192
+        audioRecordBufferSizeInBytes = maxOf(minBufferSize, 8192)
 
         audioRecordBuffer = ShortArray(audioRecordBufferSizeInBytes / 2) // Each Short is 2 bytes for PCM_16BIT
 
@@ -494,7 +571,7 @@ class MainActivity : AppCompatActivity() {
 
                             }
                         }
-                        delay(40)
+                        delay(50)
                     } else if (readSize < 0) {
                         Log.e("AudioRecordListener", "AudioRecord read error: $readSize")
                     }

@@ -497,10 +497,10 @@ class SecondActivity : AppCompatActivity() {
                         //val fundamentalFrequency = autocorrelate(floatSamples, audioRecordSampleRate)
                         //val fundamentalFrequency = amdf(floatSamples, audioRecordSampleRate)
                         //val fundamentalFrequency = zcr(floatSamples, audioRecordSampleRate)
-                        //val fundamentalFrequency = yin(floatSamples, audioRecordSampleRate)
+                        val fundamentalFrequency = yin(floatSamples, audioRecordSampleRate)
                         //val fundamentalFrequency = mcleodPitchMethod(floatSamples, audioRecordSampleRate)
                         //val fundamentalFrequency = fftFreq(floatSamples, audioRecordSampleRate)
-                        val fundamentalFrequency = harmonicProductSpectrum(floatSamples, audioRecordSampleRate)
+                        //val fundamentalFrequency = harmonicProductSpectrum(floatSamples, audioRecordSampleRate)
                         var maxAmplitude = 0
                         for (i in 0 until readSize) {
                             val currentSampleAbs = abs(audioRecordBuffer[i].toInt())
