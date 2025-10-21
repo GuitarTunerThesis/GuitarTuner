@@ -56,7 +56,7 @@
         app2:layout_constraintEnd_toEndOf="parent"
         app2:layout_constraintStart_toStartOf="parent"
         app2:layout_constraintTop_toTopOf="parent"
-        app2:layout_constraintVertical_bias="0.212" />
+        app2:layout_constraintVertical_bias="0.695" />
 
     <androidx.compose.ui.platform.ComposeView
 

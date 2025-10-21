@@ -122,6 +122,25 @@ private val dropD = mapOf(
     329.63 to "E4"
 )
 
+private val openG = mapOf(
+    73.42 to "D2",
+    97.99 to "G2",
+    146.83 to "D3",
+    196.00 to "G3",
+    246.94 to "B3",
+    293.66 to "D4"
+)
+
+private val DADGAD = mapOf(
+    73.42 to "D2",
+    110.00 to "A2",
+    146.83 to "D3",
+    196.00 to "G3",
+    220.00 to "A3",
+    293.66 to "D4",
+)
+
+
 
 fun loadCustomTuning(context: Context): Map<Double, String>? {
     val sharedPreferences = context.getSharedPreferences("GuitarTunerPrefs", Context.MODE_PRIVATE)
@@ -153,7 +172,7 @@ fun loadCustomTuningList(context: Context): List<String> {
     )
 }
 
-private val tunings = mapOf("Standard" to standardTuning, "Drop D" to dropD, "Open G" to standardTuning, "DADGAD" to standardTuning)
+private val tunings = mapOf("Standard" to standardTuning, "Drop D" to dropD, "Open G" to openG, "DADGAD" to DADGAD)
 
 object TuningState{
     var selectedTuningName by mutableStateOf("Standard")
